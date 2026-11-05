@@ -171,6 +171,8 @@ h1{animation:titleflash 1.2s steps(1) infinite}
 .pinbox{max-width:360px;margin:26px auto 0;text-align:center}
 .pinbox p{color:#ccc;margin:0 0 18px;font-size:21px}
 .pinbox .pin{margin-bottom:16px}
+.pin.tel{letter-spacing:.08em;font-size:26px;max-width:280px}
+.pinbox .names{margin:4px 3px 20px}
 footer{text-align:right;margin-top:34px;padding-right:2px;font-family:var(--brand);font-weight:700;font-size:15px;letter-spacing:.01em;color:#fff}
 @media (max-width:420px){
   h1{font-size:22px} .deco{gap:12px}
@@ -182,7 +184,7 @@ footer{text-align:right;margin-top:34px;padding-right:2px;font-family:var(--bran
 <body>
 <div class="wrap">
 <div style="background:#000;box-shadow:0 0 0 3px var(--lemon);color:var(--lemon);font-size:19px;padding:8px 10px;margin:3px 3px 14px;text-align:center;line-height:1.2">
-<span style="font-family:var(--px);font-size:9px">TEST VERSION</span> — saves on this device only.<br>Starting PINs: Math 1111 · Sarah 2222 · Bobs 3333 · Simon 4444 · Mike 5555 (you'll be asked to pick your own)<br>Hidden viewer: tap no name, type 6666 · Alerts only work on the real server</div>
+<span style="font-family:var(--px);font-size:9px">TEST VERSION</span> — saves on this device only.<br>Starting PINs: Math 1111 · Sarah 2222 · Bobs 3333 · Simon 4444 · Mike 5555 (you'll be asked to pick your own)<br>Hidden viewer: tap no name, type 6666 · No real texts or alerts are sent here</div>
   <header>
     <div class="deco"><h1 id="band">80s-ish</h1></div>
     <div class="sub" id="sub">Rehearsal Calendar</div>
@@ -206,12 +208,16 @@ footer{text-align:right;margin-top:34px;padding-right:2px;font-family:var(--bran
     {name:'Bobs',color:'#ff2e88',pin:'3333'},{name:'Simon',color:'#fff35c',pin:'4444'},
     {name:'Mike',color:'#8fd3ff',pin:'5555'}];
   const VIEWERS=[{name:'Guest',pin:'6666'}];
-  const K='bac80demo-data', KP='bac80demo-pins';
+  const K='bac80demo-data', KP='bac80demo-pins', KPH='bac80demo-phones';
   let mem={avail:{},events:[]}, memP={};
   const get=(k,m)=>{ try{ return JSON.parse(localStorage.getItem(k)) || m; }catch(e){ return m; } };
   const put=(k,v)=>{ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
   const read=()=>get(K,mem), write=d=>{ mem=d; put(K,d); };
   const pins=()=>get(KP,memP), writePins=p=>{ memP=p; put(KP,p); };
+  const phones=()=>get(KPH,{}), savePhone=(n,ph)=>{ const a=phones(); a[n]=ph; put(KPH,a); };
+  const normPhone=p=>{ p=String(p||'').replace(/[\s\-().]/g,''); if(/^07\d{9}$/.test(p)) return '+44'+p.slice(1); if(/^447\d{9}$/.test(p)) return '+'+p; if(/^\+\d{8,15}$/.test(p)) return p; return null; };
+  const reply=n=>({name:n,token:sign(n),admin:n===ADMIN,viewer:false,needPhone:!phones()[n]});
+  const pinProblem=(n,p)=>!/^\d{4,8}$/.test(p)?'PIN must be 4 to 8 numbers':MEMBERS.find(m=>m.name===n).pin===p?'Choose a different PIN from the one you were given':(/^(\d)\1+$/.test(p)||'0123456789'.includes(p))?'Too easy to guess — try another':null;
   const ver=n=>pins()[n] ? 'v'+pins()[n].length+pins()[n].slice(-2) : 'default';
   const sign=(n,scope)=>n+'.'+(scope||'full')+'.'+ver(n);
   const nameOf=t=>String(t||'').split('.')[0];
@@ -236,18 +242,32 @@ footer{text-align:right;margin-top:34px;padding-right:2px;font-family:var(--bran
         if (!b.name){ const v=VIEWERS.find(v=>b.pin && v.pin===b.pin); return v ? res({name:v.name,token:sign(v.name),admin:false,viewer:true}) : res({error:'Tap your name first'},401); }
         const m=MEMBERS.find(m=>m.name===b.name); if(!m) return res({error:'Wrong PIN'},401);
         const own=pins()[m.name];
-        if (own) return own===b.pin ? res({name:m.name,token:sign(m.name),admin:m.name===ADMIN,viewer:false}) : res({error:'Wrong PIN'},401);
+        if (own) return own===b.pin ? res(reply(m.name)) : res({error:'Wrong PIN'},401);
         if (m.pin!==b.pin) return res({error:'Wrong PIN'},401);
         return res({name:m.name,token:sign(m.name,'chg'),mustChange:true,admin:false,viewer:false});
       }
       case 'change_pin': {
         const n=nameOf(b.token); if(!isM(n) || (b.token!==sign(n,'chg') && b.token!==sign(n))) return res({error:'Please log in again'},401);
-        const p=String(b.pin||'');
-        if (!/^\d{4,8}$/.test(p)) return res({error:'PIN must be 4 to 8 numbers'},400);
-        if (MEMBERS.find(m=>m.name===n).pin===p) return res({error:'Choose a different PIN from the one you were given'},400);
-        if (/^(\d)\1+$/.test(p) || '0123456789'.includes(p)) return res({error:'Too easy to guess — try another'},400);
+        const p=String(b.pin||''), e=pinProblem(n,p); if (e) return res({error:e},400);
+        if ((b.phone||'').trim() || !phones()[n]){ const ph=normPhone(b.phone); if(!ph) return res({error:'Add your mobile number (e.g. 07700 900123) so you can reset your PIN if you forget it'},400); savePhone(n,ph); }
         const all=pins(); all[n]=p; writePins(all);
-        return res({name:n,token:sign(n),admin:n===ADMIN,viewer:false});
+        return res(reply(n));
+      }
+      case 'set_phone': {
+        const n=nameOf(b.token); if(!isM(n) || b.token!==sign(n)) return res({error:'Please log in again'},401);
+        const ph=normPhone(b.phone); if(!ph) return res({error:"That doesn't look like a mobile number"},400);
+        savePhone(n,ph); return res(reply(n));
+      }
+      case 'forgot_pin': {
+        const ph=normPhone(b.phone);
+        if (isM(b.name) && ph && phones()[b.name]===ph) return res({ok:true, demoLink:'?reset=demo-'+encodeURIComponent(b.name)+'-'+Date.now()});
+        return res({ok:true});
+      }
+      case 'reset_pin': {
+        const m=/^demo-(.+)-(\d+)$/.exec(String(b.reset||'')); const n=m && decodeURIComponent(m[1]);
+        if (!m || !isM(n) || Date.now()-(+m[2])>900000) return res({error:'This reset link has expired. Ask for a new one from "Forgot PIN?"'},410);
+        const e=pinProblem(n,String(b.pin||'')); if (e) return res({error:e},400);
+        const all=pins(); all[n]=String(b.pin); writePins(all); return res(reply(n));
       }
       case 'push_key': case 'push_sub': case 'push_test':
         return res({error:'Alerts only work once it\'s on the real server'},400);
@@ -282,7 +302,8 @@ const TYPES = {rehearsal:'Rehearsal', gig:'Gig', other:'Other'};
 const SHORT = {rehearsal:'<span class="lg">Rehearsal</span><span class="sm">Reh</span>', gig:'Gig', other:'Note'};
 let S = {members:[], avail:{}, events:[], band:'80s-ish', admin:''};
 let me = store('bac80');             // {name, token, admin, viewer}
-let viewOnly = false;                // public "Just looking": gigs only
+let viewOnly = false;
+let resetTok = new URLSearchParams(location.search).get('reset');   // from a "Forgot PIN" text                // public "Just looking": gigs only
 let view = new Date(); view.setDate(1);
 let quick = true;                    // Quick mark is on when the app opens
 let openKey = null;
@@ -323,7 +344,10 @@ async function api(action, body){
 async function load(){
   try{
     if (!me && viewOnly){ S = await api('public'); render(); if (openKey) openDay(openKey, true); return; }
-    if (me && me.mustChange){ return render(); }
+    if (resetTok || (me && me.mustChange)){
+      if (!S.members.length){ const p = await api('members'); S.members = p.members; S.band = p.band; }
+      return render();
+    }
     if (!me){ const p = await api('members'); S.members = p.members; S.band = p.band; return render(); }
     S = await api('state'); render(); if (openKey) openDay(openKey, true);
   }
@@ -341,6 +365,7 @@ function renderLogin(){
       <input class="pin" id="pin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="8" placeholder="PIN">
       <button class="primary" id="go" style="width:200px">Start</button>
       <div class="err" id="err"></div>
+      <button class="viewonly" id="forgot">Forgot PIN?</button><br>
       <button class="viewonly" id="vo">Just looking — see our gigs</button>
     </div>`;
   document.querySelectorAll('.names button').forEach(b => b.onclick = () => {
@@ -352,13 +377,14 @@ function renderLogin(){
     try{
       me = await api('login', {name:pick || '', pin:$('#pin').value});
       store('bac80', me); viewOnly = false;
-      if (me.mustChange) return render();
+      if (me.mustChange || me.needPhone) return render();
       load();
     }catch(e){ $('#err').textContent = e.message; $('#pin').value=''; }
   };
   $('#go').onclick = go;
   $('#pin').onkeydown = e => { if (e.key === 'Enter') go(); };
   $('#vo').onclick = () => { viewOnly = true; load(); };
+  $('#forgot').onclick = renderForgot;
 }
 /* ---------- choose your own PIN (forced on first login) ---------- */
 function renderChangePin(forced){
@@ -369,6 +395,8 @@ function renderChangePin(forced){
       <p>${forced ? 'Choose your own PIN to carry on. 4 to 8 numbers.' : 'Pick a new PIN. 4 to 8 numbers.'}</p>
       <input class="pin" id="np1" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" placeholder="NEW PIN">
       <input class="pin" id="np2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" placeholder="AGAIN">
+      ${forced ? `<p style="margin:6px 0 10px">Your mobile number, so you can reset your PIN by text if you forget it.</p>
+      <input class="pin tel" id="nph" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="07…">` : ''}
       <button class="primary" id="savepin" style="width:220px">Save PIN</button>
       <div class="err" id="err"></div>
       <button class="viewonly" id="cancelpin">${forced ? 'Log out' : 'Cancel'}</button>
@@ -377,14 +405,93 @@ function renderChangePin(forced){
     const a = $('#np1').value, b = $('#np2').value;
     if (a !== b) { $('#err').textContent = "PINs don't match"; return; }
     try{
-      const r = await api('change_pin', {token:me.token, pin:a});
+      const r = await api('change_pin', {token:me.token, pin:a, phone: $('#nph') ? $('#nph').value : ''});
       me = r; store('bac80', me); toast('PIN saved'); load();
     }catch(e){ $('#err').textContent = e.message; }
   };
   $('#savepin').onclick = save;
-  $('#np2').onkeydown = e => { if (e.key === 'Enter') save(); };
+  $('#np2').onkeydown = e => { if (e.key === 'Enter' && !$('#nph')) save(); };
   $('#cancelpin').onclick = () => forced ? logout() : render();
   $('#np1').focus();
+}
+
+/* ---------- mobile number (needed for PIN reset by text) ---------- */
+function renderPhone(forced){
+  $('#who').innerHTML = '';
+  $('#app').innerHTML = `
+    <div class="pinbox">
+      <div class="label">${forced ? 'One more thing' : 'Mobile number'}</div>
+      <p>${forced ? 'Add your mobile number, so you can reset your PIN by text if you forget it.' : 'Change the number your PIN reset texts go to.'}</p>
+      <input class="pin tel" id="ph" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="07…">
+      <button class="primary" id="saveph" style="width:220px">Save number</button>
+      <div class="err" id="err"></div>
+      <button class="viewonly" id="cancelph">${forced ? 'Log out' : 'Cancel'}</button>
+    </div>`;
+  const save = async () => {
+    try{ const r = await api('set_phone', {token:me.token, phone:$('#ph').value}); me = {...me, needPhone:false}; store('bac80', me); toast('Number saved'); load(); }
+    catch(e){ $('#err').textContent = e.message; }
+  };
+  $('#saveph').onclick = save;
+  $('#ph').onkeydown = e => { if (e.key === 'Enter') save(); };
+  $('#cancelph').onclick = () => forced ? logout() : render();
+  $('#ph').focus();
+}
+
+/* ---------- forgot PIN: text a one-time link ---------- */
+function renderForgot(){
+  let pick = null;
+  $('#who').innerHTML = '';
+  $('#app').innerHTML = `
+    <div class="pinbox">
+      <div class="label">Forgot PIN</div>
+      <p>Tap your name and enter your mobile number. We'll text you a link to choose a new PIN.</p>
+      <div class="names">${S.members.map(m=>`<button data-n="${esc(m.name)}"><span class="sw" style="background:${m.color}"></span>${esc(m.name)}</button>`).join('')}</div>
+      <input class="pin tel" id="fph" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="07…">
+      <button class="primary" id="fsend" style="width:240px">Text me a link</button>
+      <div class="err" id="err"></div>
+      <button class="viewonly" id="fback">Back</button>
+    </div>`;
+  document.querySelectorAll('.names button').forEach(b => b.onclick = () => {
+    document.querySelectorAll('.names button').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); pick = b.dataset.n; $('#fph').focus();
+  });
+  $('#fback').onclick = () => render();
+  $('#fsend').onclick = async () => {
+    if (!pick) return $('#err').textContent = 'Tap your name first';
+    try{
+      const r = await api('forgot_pin', {name:pick, phone:$('#fph').value});
+      document.querySelector('.pinbox').innerHTML = `
+        <div class="label">Check your texts</div>
+        <p>If that's ${esc(pick)}'s number, a text is on its way. The link works once, for 15 minutes.</p>
+        ${r.demoLink ? `<p><a href="${r.demoLink}" style="color:var(--lime)">TEST VERSION: open the link the text would contain</a></p>` : ''}
+        <button class="viewonly" id="fback">Back to log in</button>`;
+      $('#fback').onclick = () => render();
+    }catch(e){ $('#err').textContent = e.message; }
+  };
+}
+
+/* ---------- arrived from the reset text ---------- */
+function clearReset(){ resetTok = null; try{ history.replaceState(null, '', location.pathname); }catch(e){} }
+function renderReset(){
+  $('#who').innerHTML = '';
+  $('#app').innerHTML = `
+    <div class="pinbox">
+      <div class="label">Choose a new PIN</div>
+      <p>4 to 8 numbers.</p>
+      <input class="pin" id="rp1" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" placeholder="NEW PIN">
+      <input class="pin" id="rp2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" placeholder="AGAIN">
+      <button class="primary" id="rsave" style="width:220px">Save PIN</button>
+      <div class="err" id="err"></div>
+      <button class="viewonly" id="rback">Back to log in</button>
+    </div>`;
+  const save = async () => {
+    if ($('#rp1').value !== $('#rp2').value) return $('#err').textContent = "PINs don't match";
+    try{ me = await api('reset_pin', {reset:resetTok, pin:$('#rp1').value}); store('bac80', me); clearReset(); toast('PIN saved'); load(); }
+    catch(e){ $('#err').textContent = e.message; }
+  };
+  $('#rsave').onclick = save;
+  $('#rp2').onkeydown = e => { if (e.key === 'Enter') save(); };
+  $('#rback').onclick = () => { clearReset(); render(); };
+  $('#rp1').focus();
 }
 
 function logout(){ me = null; viewOnly = false; store('bac80', null); S.avail = {}; S.events = []; closeSheet(); load(); }
@@ -393,8 +500,10 @@ function logout(){ me = null; viewOnly = false; store('bac80', null); S.avail = 
 function render(){
   $('#band').textContent = S.band || '80s-ish';
   $('#sub').textContent = viewOnly ? 'Gigs' : 'Rehearsal Calendar';
+  if (resetTok) return renderReset();
   if (!me && !viewOnly) return renderLogin();
   if (me && me.mustChange) return renderChangePin(true);
+  if (me && me.needPhone && !me.viewer) return renderPhone(true);
 
   $('#who').innerHTML = !me
     ? `Gig listings<button id="lo">Band sign in</button>`
@@ -441,9 +550,9 @@ function render(){
     <div class="tgrid" id="grid" style="aspect-ratio:4/${(rows*0.866).toFixed(3)}">${cells}</div>
     ${upcoming()}
     ${canMark() ? `<section class="card"><h3>Alerts</h3><div class="alertbox" id="pushBox">…</div>
-      <button class="linkbtn" id="chgpin">Change my PIN</button></section>` : ''}
+      <button class="linkbtn" id="chgpin">Change my PIN</button> &nbsp; <button class="linkbtn" id="chgph">Change my mobile number</button></section>` : ''}
   `;
-  if (canMark()){ renderPush(); $('#chgpin').onclick = () => renderChangePin(false); }
+  if (canMark()){ renderPush(); $('#chgpin').onclick = () => renderChangePin(false); $('#chgph').onclick = () => renderPhone(false); }
 
   $('#prev').onclick = () => shift(-1);
   $('#next').onclick = () => shift(1);
